@@ -1,0 +1,12 @@
+{application, pusher_client, [
+    {description, "An Erlang pusher.com client based on Gun"},
+    {vsn, "0.1.0"},
+    {id, "git"},
+    {modules, []},
+    {registered, [pusher_client]},
+    {applications, [
+        kernel, 
+        stdlib, 
+        gun
+    ]}
+]}.
