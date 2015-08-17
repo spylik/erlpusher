@@ -22,20 +22,23 @@
         start_link/1
     ]).
 
-% we will use ?MODULE as servername
--define(SERVER, ?MODULE).
--define(deadlinkTTL, 60000).
--define(heartbeat_freq, 1000).
--define(timeout_for_gun_ws_upgrade, 10000).
-
 % start api
 
-start_link() ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+start_link(State) when State#erlpusher_state.server =/= undefined
+        andalso State#erlpusher_state.pusher_app_id =/= undefined 
+        andalso State#erlpusher_state.channels =/= undefined
+        ->
+    error_logger:info_msg("Erlpusher start with state ~p",[State]),
+    gen_server:start_link({local, State#erlpusher_state.server}, ?MODULE, State, []).
 
-init([]) ->
-    TRef = erlang:send_after(?heartbeat_freq, self(), heartbeat),
-    {ok, #erlpusher_state{tref=TRef}}.
+init(State) ->
+    TRef = erlang:send_after(State#erlpusher_state.heartbeat_freq, self(), heartbeat),
+
+    % return state
+    {ok, 
+        State#erlpusher_state{
+            heartbeat_tref=TRef
+        }}.
 
 %--------------handle_call-----------------
 
@@ -96,26 +99,10 @@ handle_info({gun_ws, _ConnPid, Frame}, State) ->
 % hearbeat for find and recovery dead connection
 handle_info(heartbeat, State) ->
     error_loger:info_msg("We are in hearbeat section with state ~p", [State]),
-    _ = erlang:cancel_timer(State#erlpusher_state.tref),
-    case is_integer(State#erlpusher_state.last_frame) of
-        true ->
-            IsDead = get_time() - State#erlpusher_state.last_frame,
-            NeedConnect = IsDead > ?deadlinkTTL;
-        false ->
-            NeedConnect = false
-    end,
-
-    case State#erlpusher_state.gun_ref of
-        undefined ->
-            NewState = connect(State);
-        _ when NeedConnect =:= true ->
-            NewState = connect(flush_gun(State, undefined));
-        _ ->
-            NewState = State
-    end,
-
-    TRef = erlang:send_after(?heartbeat_freq, ?SERVER, heartbeat),
-    {noreply, NewState#erlpusher_state{tref=TRef}};
+    _ = erlang:cancel_timer(State#erlpusher_state.heartbeat_tref),
+    NewState = may_need_connect(State, State#erlpusher_state.gun_ref, State#erlpusher_state.last_frame),
+    TRef = erlang:send_after(State#erlpusher_state.heartbeat_freq, self(), heartbeat),
+    {noreply, NewState#erlpusher_state{heartbeat_tref=TRef}};
 
 
 % handle_info for all other thigs
@@ -155,6 +142,21 @@ flush_gun(State, ConnRef) ->
     end,
     State#erlpusher_state{last_frame=undefined,gun_pid=undefined, gun_ref=undefined}.
 
+% may need connect
+may_need_connect(State, undefined, _LastFrame) ->
+    connect(State);
+may_need_connect(State, _GunRef, LastFrame) when is_integer(LastFrame) ->
+    case get_time() - LastFrame > State#erlpusher_state.noreceive_ttl of
+        true -> 
+            connect(flush_gun(State, undefined));
+        false ->
+            State
+    end;
+may_need_connect(State, _GunRef, _LastFrame) ->
+    State.
+
+
+% connect
 connect(State) ->
     error_logger:info_msg("We are in connect section with state ~p", State),
     {ok, Pid} = gun:open("wss.pusherapp.com", 443, #{retry=>0}),
@@ -165,17 +167,16 @@ connect(State) ->
             receive
                 {gun_ws_upgrade, Pid, ok, _} ->
                     error_logger:info_msg("connected"),
-                    NewState = State#erlpusher_state{gun_pid=Pid, gun_ref=GunRef}
-            after ?timeout_for_gun_ws_upgrade ->
+                    State#erlpusher_state{gun_pid=Pid, gun_ref=GunRef}
+            after State#erlpusher_state.timeout_for_gun_ws_upgrade ->
                 error_logger:warning_msg("got timeout_for_gun_ws_upgrade"),
-                NewState = flush_gun(State, Pid)
+                flush_gun(State, Pid)
             end;
         {error, timeout} ->
             error_logger:warning_msg("{error, timeout} when trying to connect"),
-            NewState = flush_gun(State, Pid)
-    end,
-    error_logger:info_msg("Checkout from connect"),
-    NewState.
+            flush_gun(State, Pid)
+    end.
+
 
 % get time
 get_time() ->

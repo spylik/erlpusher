@@ -12,5 +12,6 @@
         % pusher_client operations section
         gun_pid,                                     % current gun connection Pid
         gun_ref,                                     % current gun monitor refference
+        last_frame,                                  % last frame timestamp
         heartbeat_tref                               % last heartbeat time refference
     }).
