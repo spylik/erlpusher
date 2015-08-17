@@ -23,21 +23,24 @@
     ]).
 
 % start api
-
 start_link(State) when State#erlpusher_state.server =/= undefined
         andalso State#erlpusher_state.pusher_app_id =/= undefined 
         andalso State#erlpusher_state.channels =/= undefined
         ->
     error_logger:info_msg("Erlpusher start with state ~p",[State]),
-    gen_server:start_link({local, State#erlpusher_state.server}, ?MODULE, State, []).
+    gen_server:start_link({local, State#erlpusher_state.server}, ?MODULE, [State, self()], []).
 
-init(State) ->
+init([State, Parent]) when State#erlpusher_state.report_to =:= undefined ->
+    init([State#erlpusher_state{report_to=Parent}, Parent]);
+init([State, _Parent]) ->
     TRef = erlang:send_after(State#erlpusher_state.heartbeat_freq, self(), heartbeat),
-
+    
     % return state
     {ok, 
         State#erlpusher_state{
-            heartbeat_tref=TRef
+            heartbeat_tref = TRef,
+            pusher_url = generate_url(State),
+            report_topic = generate_topic(State)
         }}.
 
 %--------------handle_call-----------------
@@ -53,7 +56,15 @@ handle_call(Msg, _From, State) ->
 %--------------handle_cast-----------------
 % subscribe
 handle_cast({subscribe, all}, State) ->
-    subscribe(State#erlpusher_state.gun_pid),
+    ChannelList = State#erlpusher_state.channels,
+    lists:map(
+        fun(Channel) -> gun:ws_send(State#erlpusher_state.gun_pid, {text, <<"{\"event\": \"pusher:subscribe\", \"data\": {\"channel\": \"", Channel/binary, "\"} }">>}) end, 
+        ChannelList
+    ),
+    {noreply, State};
+
+handle_cast(ping, State) ->
+    gun:ws_send(State#erlpusher_state.gun_pid, {text, <<"{\"event\": \"pusher:ping\"}">>}),
     {noreply, State};
 
 % handle_cast for all other thigs
@@ -64,6 +75,13 @@ handle_cast(Msg, State) ->
 
 
 %--------------handle_info-----------------
+handle_info({gun_ws, ConnPid, {text, <<"{\"event\":\"pusher:connection_established\"", _Rest/binary>>}}, State) ->
+    % going to subscribe
+%    lists:map(
+    io:format("got pusher:connection_established for pid ~p", [ConnPid]),
+    gen_server:cast(self(), {subscribe, all}),
+    {noreply, State#erlpusher_state{last_frame=get_time()}};
+
 handle_info({gun_ws, _ConnPid, {text, Frame}}, State) ->
     error_logger:info_msg("got {text, Frame}: ~p", [Frame]),
 %    Worker = poolboy:checkout(bitstamp_parser),
@@ -92,13 +110,13 @@ handle_info({'DOWN', _ReqRef, _, ConnPid, _}, State) ->
 
 % unknown frame
 handle_info({gun_ws, _ConnPid, Frame}, State) ->
-    error_loger:warning_msg("got non-text gun_ws event with Frame ~p", [Frame]),
+    error_logger:warning_msg("got non-text gun_ws event with Frame ~p", [Frame]),
     {noreply, State};
 
 
 % hearbeat for find and recovery dead connection
 handle_info(heartbeat, State) ->
-    error_loger:info_msg("We are in hearbeat section with state ~p", [State]),
+%    error_logger:info_msg("We are in hearbeat section with state ~p", [State]),
     _ = erlang:cancel_timer(State#erlpusher_state.heartbeat_tref),
     NewState = may_need_connect(State, State#erlpusher_state.gun_ref, State#erlpusher_state.last_frame),
     TRef = erlang:send_after(State#erlpusher_state.heartbeat_freq, self(), heartbeat),
@@ -113,9 +131,7 @@ handle_info(Msg, State) ->
 
 
 terminate(_Reason, State) ->
-    demonitor(State#erlpusher_state.gun_ref),
-    gun:close(State#erlpusher_state.gun_pid),
-    gun:flush(State#erlpusher_state.gun_pid).
+    flush_gun(State, undefined).
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
@@ -124,7 +140,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 % gun clean_up
 flush_gun(State, ConnRef) ->
-    error_logger:info_msg("We are in flush gun section with state ~p", State),
+    error_logger:info_msg("We are in flush gun section with state ~p", [State]),
     case ConnRef =:= undefined of
         true when State#erlpusher_state.gun_ref =/= undefined ->
             demonitor(State#erlpusher_state.gun_ref),
@@ -158,12 +174,12 @@ may_need_connect(State, _GunRef, _LastFrame) ->
 
 % connect
 connect(State) ->
-    error_logger:info_msg("We are in connect section with state ~p", State),
+    error_logger:info_msg("We are in connect section with state ~p", [State]),
     {ok, Pid} = gun:open("wss.pusherapp.com", 443, #{retry=>0}),
     case gun:await_up(Pid) of
         {ok, http} ->
             GunRef = monitor(process, Pid),
-            gun:ws_upgrade(Pid, "/app/de504dc5763aeef9ff52?client=maria&version=1.0&protocol=7", [], #{compress => true}),
+            gun:ws_upgrade(Pid, State#erlpusher_state.pusher_url, [], #{compress => true}),
             receive
                 {gun_ws_upgrade, Pid, ok, _} ->
                     error_logger:info_msg("connected"),
@@ -182,12 +198,12 @@ connect(State) ->
 get_time() ->
     erlang:convert_time_unit(erlang:system_time(), native, milli_seconds).
 
-% subscribe to channels
-subscribe(Pid) -> 
-    subscribe(Pid, diff_order_book),
-    subscribe(Pid, live_trades).
+% generate url
+generate_url(State) ->
+    "/app/"++State#erlpusher_state.pusher_app_id++"?client="++State#erlpusher_state.pusher_ident++"&version=1.0&protocol=7".
 
-subscribe(Pid, diff_order_book) ->
-    gun:ws_send(Pid, {text, <<"{\"event\": \"pusher:subscribe\", \"data\": {\"channel\": \"diff_order_book\"} }">>});
-subscribe(Pid, live_trades) ->
-    gun:ws_send(Pid, {text, <<"{\"event\": \"pusher:subscribe\", \"data\": {\"channel\": \"live_trades\"} }">>}).
+% generate report topic
+generate_topic(State) when State#erlpusher_state.report_topic =:= undefined ->
+    atom_to_list(State#erlpusher_state.server)++".output";
+generate_topic(State) ->
+    State#erlpusher_state.report_topic.
