@@ -4,7 +4,7 @@
         server,                                      % moderate: servername
         pusher_app_id,                               % moderate: pusher_app_id
         channels,                                    % moderate: channel for subscribe
-        report_to,                                   % send output frames to pid or erlyroute
+        report_to,                                   % send output frames to pid or erlroute
         report_topic,                                % generated or predefined output topic for erlyroute
         pusher_ident = "erlpusher",                  % identification of client
         timeout_for_gun_ws_upgrade = 10000,          % timeout for gun_ws_upgrade message
