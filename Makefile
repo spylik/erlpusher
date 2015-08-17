@@ -1,8 +1,4 @@
-PROJECT = pusher_client
-
-ERLC_COMPILE_OPTS= "+{parse_transform, lager_transform}"
-ERLC_OPTS += $(ERLC_COMPILE_OPTS)
-TEST_ERLC_OPTS += $(ERLC_COMPILE_OPTS)
+PROJECT = erlpusher
 
 DEPS = gun poolboy
 

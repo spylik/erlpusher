@@ -1,20 +1,14 @@
 %% --------------------------------------------------------------------------------
-%% File:    pusher_client.erl
+%% File:    erlpusher.erl
 %% @author  Oleksii Semilietov <spylik@gmail.com>
 %%
 %% @doc
-%% This source code is part of project "Maria" (https://github.com/spylik/maria)
-%% and contin websocket gun getter from bitstamp bitcoin market.
-%%
-%% Bitstamp uses pusher (https://pusher.com/docs/pusher_protocol) for publish 
-%% realtime market data, so we should subscribe for the live_trades and 
-%% diff_order_book topics.
 %% @end
 %% --------------------------------------------------------------------------------
 
--module(pusher_client).
+-module(erlpusher).
 
--include("pusher_client.hrl").
+-include("erlpusher.hrl").
 
 % gen server is here
 -behaviour(gen_server).
@@ -25,7 +19,7 @@
 
 % public api
 -export([
-        start_link/0
+        start_link/1
     ]).
 
 % we will use ?MODULE as servername
@@ -34,23 +28,21 @@
 -define(heartbeat_freq, 1000).
 -define(timeout_for_gun_ws_upgrade, 10000).
 
-% record for keep state
--record(state, {gun_pid, gun_ref, last_frame, tref}).
-
 % start api
+
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 init([]) ->
     TRef = erlang:send_after(?heartbeat_freq, self(), heartbeat),
-    {ok, #state{tref=TRef}}.
+    {ok, #erlpusher_state{tref=TRef}}.
 
 %--------------handle_call-----------------
 
 
 % handle_call for all other thigs
 handle_call(Msg, _From, State) ->
-    lager:warning("we are in undefined handle_call with message ~p~n",[Msg]),
+    error_logger:warning_msg("we are in undefined handle_call with message ~p\n",[Msg]),
     {reply, ok, State}.
 %-----------end of handle_call-------------
 
@@ -58,23 +50,23 @@ handle_call(Msg, _From, State) ->
 %--------------handle_cast-----------------
 % subscribe
 handle_cast({subscribe, all}, State) ->
-    subscribe(State#state.gun_pid),
+    subscribe(State#erlpusher_state.gun_pid),
     {noreply, State};
 
 % handle_cast for all other thigs
 handle_cast(Msg, State) ->
-    lager:warning("we are in undefined handle cast with message ~p~n",[Msg]),
+    error_logger:warning_msg("we are in undefined handle_cast with message ~p\n",[Msg]),
     {noreply, State}.
 %-----------end of handle_cast-------------
 
 
 %--------------handle_info-----------------
 handle_info({gun_ws, _ConnPid, {text, Frame}}, State) ->
-    lager:notice("got {text, Frame}: ~p", [Frame]),
+    error_logger:info_msg("got {text, Frame}: ~p", [Frame]),
 %    Worker = poolboy:checkout(bitstamp_parser),
 %    gen_server:cast(Worker, {parse_wss, Frame}),
 %    poolboy:checkin(bitstamp_parser, Worker),
-    {noreply, State#state{last_frame=get_time()}};
+    {noreply, State#erlpusher_state{last_frame=get_time()}};
 
 % close and other events bringing gun to flush
 handle_info({gun_ws, ConnPid, close}, State) ->
@@ -97,23 +89,23 @@ handle_info({'DOWN', _ReqRef, _, ConnPid, _}, State) ->
 
 % unknown frame
 handle_info({gun_ws, _ConnPid, Frame}, State) ->
-    lager:warning("got non-text gun_ws event with Frame ~p", [Frame]),
+    error_loger:warning_msg("got non-text gun_ws event with Frame ~p", [Frame]),
     {noreply, State};
 
 
 % hearbeat for find and recovery dead connection
 handle_info(heartbeat, State) ->
-    lager:info("We are in hearbeat section with state ~p", [lager:pr(State, ?MODULE)]),
-    _ = erlang:cancel_timer(State#state.tref),
-    case is_integer(State#state.last_frame) of
+    error_loger:info_msg("We are in hearbeat section with state ~p", [State]),
+    _ = erlang:cancel_timer(State#erlpusher_state.tref),
+    case is_integer(State#erlpusher_state.last_frame) of
         true ->
-            IsDead = get_time() - State#state.last_frame,
+            IsDead = get_time() - State#erlpusher_state.last_frame,
             NeedConnect = IsDead > ?deadlinkTTL;
         false ->
             NeedConnect = false
     end,
 
-    case State#state.gun_ref of
+    case State#erlpusher_state.gun_ref of
         undefined ->
             NewState = connect(State);
         _ when NeedConnect =:= true ->
@@ -123,21 +115,20 @@ handle_info(heartbeat, State) ->
     end,
 
     TRef = erlang:send_after(?heartbeat_freq, ?SERVER, heartbeat),
-    {noreply, NewState#state{tref=TRef}};
-
+    {noreply, NewState#erlpusher_state{tref=TRef}};
 
 
 % handle_info for all other thigs
 handle_info(Msg, State) ->
-    lager:warning("we are in undefined handle info with message ~p~n",[Msg]),
+    error_logger:warning_msg("we are in undefined handle_info with message ~p\n",[Msg]),
     {noreply, State}.
 %-----------end of handle_info-------------
 
 
 terminate(_Reason, State) ->
-    demonitor(State#state.gun_ref),
-    gun:close(State#state.gun_pid),
-    gun:flush(State#state.gun_pid).
+    demonitor(State#erlpusher_state.gun_ref),
+    gun:close(State#erlpusher_state.gun_pid),
+    gun:flush(State#erlpusher_state.gun_pid).
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
@@ -146,26 +137,26 @@ code_change(_OldVsn, State, _Extra) ->
 
 % gun clean_up
 flush_gun(State, ConnRef) ->
-    lager:info("We are in flush gun section with state ~p", [lager:pr(State, ?MODULE)]),
+    error_logger:info_msg("We are in flush gun section with state ~p", State),
     case ConnRef =:= undefined of
-        true when State#state.gun_ref =/= undefined ->
-            demonitor(State#state.gun_ref),
-            gun:close(State#state.gun_pid),
-            gun:flush(State#state.gun_pid);
+        true when State#erlpusher_state.gun_ref =/= undefined ->
+            demonitor(State#erlpusher_state.gun_ref),
+            gun:close(State#erlpusher_state.gun_pid),
+            gun:flush(State#erlpusher_state.gun_pid);
         true ->
             ok;
-        false when State#state.gun_pid =:= undefined ->
+        false when State#erlpusher_state.gun_pid =:= undefined ->
             gun:close(ConnRef),
             gun:flush(ConnRef);
-        false when State#state.gun_pid =:= ConnRef ->
-            demonitor(State#state.gun_ref),
-            gun:close(State#state.gun_pid),
-            gun:flush(State#state.gun_pid)
+        false when State#erlpusher_state.gun_pid =:= ConnRef ->
+            demonitor(State#erlpusher_state.gun_ref),
+            gun:close(State#erlpusher_state.gun_pid),
+            gun:flush(State#erlpusher_state.gun_pid)
     end,
-    State#state{last_frame=undefined,gun_pid=undefined, gun_ref=undefined}.
+    State#erlpusher_state{last_frame=undefined,gun_pid=undefined, gun_ref=undefined}.
 
 connect(State) ->
-    lager:info("We are in connect section with state ~p", [lager:pr(State, ?MODULE)]),
+    error_logger:info_msg("We are in connect section with state ~p", State),
     {ok, Pid} = gun:open("wss.pusherapp.com", 443, #{retry=>0}),
     case gun:await_up(Pid) of
         {ok, http} ->
@@ -173,17 +164,17 @@ connect(State) ->
             gun:ws_upgrade(Pid, "/app/de504dc5763aeef9ff52?client=maria&version=1.0&protocol=7", [], #{compress => true}),
             receive
                 {gun_ws_upgrade, Pid, ok, _} ->
-                    lager:alert("connected"),
-                    NewState = State#state{gun_pid=Pid, gun_ref=GunRef}
+                    error_logger:info_msg("connected"),
+                    NewState = State#erlpusher_state{gun_pid=Pid, gun_ref=GunRef}
             after ?timeout_for_gun_ws_upgrade ->
-                lager:error("got timeout_for_gun_ws_upgrade"),
+                error_logger:warning_msg("got timeout_for_gun_ws_upgrade"),
                 NewState = flush_gun(State, Pid)
             end;
         {error, timeout} ->
-            lager:error("{error, timeout} when trying to connect"),
+            error_logger:warning_msg("{error, timeout} when trying to connect"),
             NewState = flush_gun(State, Pid)
     end,
-    lager:info("Checkout from connect"),
+    error_logger:info_msg("Checkout from connect"),
     NewState.
 
 % get time
