@@ -80,8 +80,12 @@ handle_info({gun_ws, _ConnPid, {text, <<"{\"event\":\"pusher:connection_establis
     ),
     {noreply, State#erlpusher_state{last_frame=get_time()}};
 
-handle_info({gun_ws, _ConnPid, {text, Frame}}, State) ->
-    send_output(State, {erlpusher_frame, Frame}),
+handle_info(
+        {gun_ws, _ConnPid, {text, Frame}}, 
+        State = #erlpusher_state {
+            pusher_app_id=PusherAppId
+        }) ->
+    send_output(State, [{erlpusher_appid, PusherAppId}, {erlpusher_frame, Frame}]),
     {noreply, State#erlpusher_state{last_frame=get_time()}};
     
 
