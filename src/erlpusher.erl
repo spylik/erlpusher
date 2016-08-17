@@ -212,7 +212,7 @@ generate_topic(State) ->
 
 % send output
 send_output(_State = #erlpusher_state{report_to=erlroute, report_topic=Report_topic, server=Server}, Frame) ->
-    erlroute:pub(?MODULE, Server, Report_topic, Frame);
+    erlroute:pub(?MODULE, Server, ?LINE, Report_topic, Frame);
 send_output(_State = #erlpusher_state{report_to=ReportTo}, Frame) ->
     ReportTo ! Frame.
 
