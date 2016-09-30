@@ -87,6 +87,15 @@ handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher:connection_establ
     ?debug(NewState),
     {noreply, NewState#erlpusher_state{last_frame=get_time()}};
 
+handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher_internal:subscription_succeeded\",\"data\":\"{}\",\"channel\":\"", HaveChannelHere/binary>>}}, State = #erlpusher_state{subscribed = Subscribed}) ->
+    Channel = binary:split(HaveChannelHere, <<"\"}">>, [trim]),
+    ?debug("catch channel ~p",[Channel]),
+    {noreply, State#erlpusher_state{
+            last_frame=get_time(), 
+            subscribed = [Channel|Subscribed]
+        }
+    };
+
 handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher_internal:subscription_succeeded\"", _Rest/binary>> = Frame}}, State) ->
     error_logger:warning_msg("~p", [Frame]),
     {noreply, State#erlpusher_state{last_frame=get_time()}};
@@ -97,15 +106,15 @@ handle_info({'gun_ws', _ConnPid, {text, Frame}}, State = #erlpusher_state{pusher
     
 %% ---- close and other events bringing gun to flush ---- %%
 
-% @doc gun
+% @doc gun_ws close
 handle_info({'gun_ws', ConnPid, 'close'}, State) ->
     gun:ws_send(ConnPid, 'close'),
-    NewState = flush_gun(State, ConnPid),
-    {noreply, NewState};
+    {noreply, flush_gun(State, ConnPid)};
+
+% @doc gun_ws close with code
 handle_info({'gun_ws', ConnPid, {'close', Code, _}}, State) ->
     gun:ws_send(ConnPid, {'close', Code, <<>>}),
-    NewState = flush_gun(State, ConnPid),
-    {noreply, NewState};
+    {noreply, flush_gun(State, ConnPid)};
 
 % @doc gun_error
 handle_info({'gun_error', ConnPid, Reason}, State) ->
@@ -164,7 +173,7 @@ may_need_connect(State = #erlpusher_state{gun_pid = 'undefined'}) ->
     connect(State);
 may_need_connect(State = #erlpusher_state{last_frame = LastFrame}) when is_integer(LastFrame) ->
     ?debug(State),
-    case get_time() - LastFrame > State#erlpusher_state.noreceive_ttl of
+    case get_time() - LastFrame > State#erlpusher_state.noreceive_conn_ttl of
         true ->
             ?here,
             connect(flush_gun(State, 'undefined'));
@@ -201,7 +210,7 @@ connect(State = #erlpusher_state{
     end, ?debug(NewState), NewState.
 
 % @doc subscribe section
-subscribe(State = #erlpusher_state{channels = []}, 'all') ->
+subscribe(State = #erlpusher_state{channels = #{}}, 'all') ->
     ?here,
     error_logger:warning_msg("Erlpusher got subscribe(all) with empty list in state"),
     State;
@@ -209,24 +218,41 @@ subscribe(State = #erlpusher_state{channels = []}, 'all') ->
 subscribe(State = #erlpusher_state{channels = Channels}, 'all') ->
     NewState = may_need_connect(State),
     ?debug(NewState),
-    lists:map(
-        fun(Channel) -> 
+    maps:map(
+        fun(Channel, #channel_prop{status = 'toconnect'}) -> 
             send(NewState, {text, <<"{\"event\": \"pusher:subscribe\", \"data\": {\"channel\": \"", Channel/binary, "\"} }">>})
         end, Channels
     ), NewState;
 
 subscribe(State = #erlpusher_state{channels = Channels}, Channel) when is_binary(Channel) ->
     ?debug(State),
-    NewState = send(may_need_connect(State), {text, <<"{\"event\": \"pusher:subscribe\", \"data\": {\"channel\": \"", Channel/binary, "\"} }">>}),
-    ?debug(NewState),
-    NewState#erlpusher_state{channels = [Channel|Channels]}.
+    Time = get_time(),
+    NewRootState = case is_key(Channel, Channels) of
+        false ->
+            NewState = may_need_connect(State),
+            case send(NewState, {text, <<"{\"event\": \"pusher:subscribe\", \"data\": {\"channel\": \"", Channel/binary, "\"} }">>}) of
+                true -> 
+                    NewState#{channels = Channels#{Channel => #{status = 'casted', created = Time, cast_sub = Time}}};
+                false -> 
+                    NewState#{channels = Channels#{Channel => #{status = 'toconnect', created = Time}}}
+            end
+        true ->
+            State
+    end
+    ?debug(NewRootState),
+    NewRootState.
 
 % @doc send frame to remote
+-spec send(State, Frame) -> Result when
+    State :: erlpusher_state(),
+    Frame :: {'text', binary()},
+    Result :: boolean().
+
 send(State = #erlpusher_state{gun_pid = 'undefined'}, _Frame) -> 
-    State;
+    false;
 send(State = #erlpusher_state{gun_pid = GunPid}, Frame) ->
     gun:ws_send(GunPid, Frame),
-    State.
+    true.
 
 % @doc gun clean_up
 flush_gun(State = #erlpusher_state{gun_ref = Gun_ref, gun_pid = Gun_pid}, ConnRef) ->
@@ -252,7 +278,7 @@ flush_gun(State = #erlpusher_state{gun_ref = Gun_ref, gun_pid = Gun_pid}, ConnRe
 
 % @doc get time
 get_time() ->
-    erlang:convert_time_unit(erlang:system_time(), native, milli_seconds).
+    erlang:system_time(milli_seconds).
 
 % @doc generate url
 generate_url(State) ->
