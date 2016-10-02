@@ -20,7 +20,7 @@
 -type report_to()               :: 'undefined' | atom() | pid() | 'erlroute' | {'erlroute', binary()}.
 
 -type start_prop() :: #{
-        'register' => register_as() |
+        'register' => register_as(),
         'channels' => channels(),
         'report_to' => report_to(),
         'pusher_ident' => pusher_ident(),
