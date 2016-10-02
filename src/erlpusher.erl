@@ -6,40 +6,108 @@
 %% An Erlang gun-driven pusher.com client.
 %% @end
 %% --------------------------------------------------------------------------------
-
 -module(erlpusher).
 
 -include("erlpusher.hrl").
+-include("deps/teaser/include/utils.hrl").
 
-% gen server is here
 -behaviour(gen_server).
 
-% gen_server api
+% @doc gen_server api
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
-% public api
+% @doc export public api
 -export([
-        start_link/1
+        start_link/2,
+        stop/1,
+        stop/2
     ]).
 
-% start api
-start_link(State) when State#erlpusher_state.server =/= undefined
-        andalso State#erlpusher_state.pusher_app_id =/= undefined 
-        ->
-    error_logger:info_msg("Erlpusher start with state ~p",[State]),
-    gen_server:start_link({local, State#erlpusher_state.server}, ?MODULE, [State, self()], []).
+% @doc export types
+-export_type([
+        pusher_app_id/1,
+        start_prop/1,
+        erlpusher_frame/1
+    ]).
 
-% when #erlpusher_state.report_to undefined, we going to send output to parent pid
-init([State = #erlpusher_state{report_to = 'undefined'}, Parent]) ->
-    init([State#erlpusher_state{report_to = Parent}, Parent]);
-init([State, _Parent]) ->
-    TRef = erlang:send_after(State#erlpusher_state.heartbeat_freq, self(), heartbeat),
+% ============================ gen_server part =================================
+
+% @doc start api start_link/1 when Parameter #woodpecker_state{}.
+-spec start_link(PusherAppId, Prop) -> Result when
+    PusherAppId :: pusher_app_id(),
+    Prop        :: start_prop(),
+    Result      :: {'ok',Pid} | 'ignore' | {'error',Error},
+    Pid         :: pid(),
+    Error       :: {'already_started',Pid} | term().
+
+start_link(PusherAppId, Prop) when is_list(PusherAppId), is_map(Prop) ->
+    Register = maps:get('register', Prop, 'undefined'),
+    InitState = #erlpusher_state{
+        'pusher_app_id' = PusherAppId,
+        'register'      = Register,
+        'channels'      = maps:get('channels',      Prop, #{}),
+        'report_to'     = maps:get('report_to',     Prop, self()),
+        'pusher_ident'  = maps:get('pusher_ident',  Prop, "erlpusher"),
+        'timeout_for_gun_ws_upgrade' = maps:get('timeout_for_gun_ws_upgrade', Prop, 10000),
+        'timeout_for_subscribtion'   = maps:get('timeout_for_subscribtion',   Prop, 10000),
+        'timeout_last_global_frame'  = maps:get('timeout_last_global_frame',  Prop, 10000)
+    },
+    case Register =:= 'undefined' of
+        true -> 
+            gen_server:start_link(?MODULE, InitState, []);
+        false ->
+            gen_server:start_link(Register, ?MODULE, InitState, [])
+    end.
+
+
+% @doc API for stop gen_server. Default is sync call.
+-spec stop(Server) -> Result when
+    Server  :: server(),
+    Result  :: term().
+
+stop(Server) ->
+    stop('sync', Server).
+
+% @doc API for stop gen_server. We support async casts and sync calls aswell.
+-spec stop(SyncAsync, Server) -> Result when
+    SyncAsync   :: 'sync' | 'async',
+    Server      :: server(),
+    Result      :: term().
+
+stop('sync', Server) ->
+    gen_server:stop(Server);
+stop('async', Server) ->
+    gen_server:cast(Server, stop).
+
+% @doc gen_server init section
+-spec init(State) -> Result when
+    State   :: woodpecker_state(),
+    Result  :: {ok, NState},
+    NState  :: woodpecker_state().
+
+% @doc main init
+init(State = #erlpusher_state{
+        pusher_app_id = PusherAppId,
+        pusher_ident = PusherIdent,
+        timeout_for_gun_ws_upgrade = Timeout_for_gun_ws_upgrade,
+        timeout_for_subscribtion = Timeout_for_subscribtion,
+        timeout_last_global_frame = Timeout_last_global_frame
+    }) ->
+    HeartBeatFreq = lists:min([
+            Timeout_for_gun_ws_upgrade,
+            Timeout_for_subscribtion,
+            Timeout_last_global_frame
+        ]),
+    NewState = may_need_connect(State#erlpusher_state{
+            heartbeat_freq = HeartBeatFreq,
+            pusher_url = generate_url(PusherAppId,PusherIdent),
+            report_to = generate_topic_if_need(State)
+        }),
+    TRef = erlang:send_after(HeartBeatFreq, self(), 'heartbeat'),
     {ok,
-        State#erlpusher_state{
+        NewState#erlpusher_state{
             heartbeat_tref = TRef,
-            pusher_url = generate_url(State),
-            report_topic = generate_topic(State)
         }}.
 
 %--------------handle_call-----------------
@@ -81,13 +149,15 @@ handle_info('heartbeat', State = #erlpusher_state{
     TRef = erlang:send_after(Heartbeat_freq, self(), heartbeat),
     {noreply, NewState#erlpusher_state{heartbeat_tref=TRef}};
 
+% @doc connection established
 handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher:connection_established\"", _Rest/binary>>}}, State) ->
     NewState = subscribe(State, 'all'),
     {noreply, NewState#erlpusher_state{last_frame=get_time()}};
 
-handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher_internal:subscription_succeeded\",\"data\":\"{}\",\"channel\":\"", HaveChannelHere/binary>>}}, State = #erlpusher_state{channels = Channels}) ->
-    [Channel] = binary:split(HaveChannelHere, <<"\"}">>, [trim]),
+% @doc subscribed to channel
+handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher_internal:subscription_succeeded\",\"data\":\"{}\",\"channel\":\"", ChannelHere/binary>>}}, State = #erlpusher_state{channels = Channels}) ->
     Time = get_time(),
+    [Channel] = binary:split(ChannelHere, <<"\"}">>, [trim]),
     ChannelData = maps:get(Channel, Channels),
     {noreply, State#erlpusher_state{
             last_frame = Time,
@@ -95,13 +165,19 @@ handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher_internal:subscrip
         }
     };
 
-handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher_internal:subscription_succeeded\"", _Rest/binary>> = Frame}}, State) ->
-    error_logger:warning_msg("~p", [Frame]),
-    {noreply, State#erlpusher_state{last_frame=get_time()}};
-
-handle_info({'gun_ws', _ConnPid, {text, Frame}}, State = #erlpusher_state{pusher_app_id = PusherAppId}) ->
-    send_output(State, [{erlpusher_appid, PusherAppId}, {erlpusher_frame, Frame}]),
-    {noreply, State#erlpusher_state{last_frame=get_time()}};
+% @doc pusher data frame
+handle_info({'gun_ws', _ConnPid, {text, Frame}}, State = #erlpusher_state{
+        pusher_app_id = PusherAppId,
+        channels = Channels
+    }) ->
+    Time = get_time(),
+    [_, Channel] = binary:split(Frame,[<<"channel\":\"">>,<<"\"}">>],[global,trim]),
+    send_output(State, #erlpusher_frame{app_id = PusherAppId, channel = Channel, frame, Frame}),
+    {noreply, State#erlpusher_state{
+            last_frame=get_time(),
+            channels = Channels#{Channel := ChannelData#channel_prop{last_frame = Time}}
+        }
+    };
     
 %% ---- close and other events bringing gun to flush ---- %%
 
@@ -164,7 +240,9 @@ terminate(_Reason, #erlpusher_state{gun_pid = GunPid} = State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-%--------------non exported functions----------------
+% --------------------------- end of gen_server part ---------------------------
+
+% =========================== other private functions ==========================
 
 % @doc check does we need to connect or reconnect
 -spec may_need_connect(State) -> Result when
@@ -174,7 +252,7 @@ code_change(_OldVsn, State, _Extra) ->
 may_need_connect(State = #erlpusher_state{gun_pid = 'undefined'}) ->
     connect(State);
 may_need_connect(State = #erlpusher_state{last_frame = LastFrame, gun_pid = GunPid}) when is_integer(LastFrame) ->
-    case get_time() - LastFrame > State#erlpusher_state.noreceive_conn_ttl of
+    case get_time() - LastFrame > State#erlpusher_state.timeout_last_global_frame of
         true ->
             connect(flush_gun(State, GunPid));
         false ->
@@ -318,34 +396,47 @@ flush_state(State = #erlpusher_state{channels = Channels}) ->
 
 
 % @doc get time
+-spec get_time() -> Result when
+    Result :: 'milli_seconds' | pos_integer()
 get_time() ->
     erlang:system_time(milli_seconds).
 
 % @doc generate url
--spec generate_url(State) -> Result when
-    State   :: erlpusher_state(),
-    Result  :: nonempty_list().
+-spec generate_url(PusherAppId, PusherIdent) -> Result when
+    PusherAppId :: pusher_app_id(),
+    PusherIdent :: pusher_ident(),
+    Result      :: nonempty_list().
 
-generate_url(#erlpusher_state{
-            pusher_app_id = Pusher_app_id,
-            pusher_ident = Pusher_ident
-        }) ->
-        lists:append(["/app/",Pusher_app_id,"?client=",Pusher_ident,"&version=1.0&protocol=7"]).
+generate_url(PusherAppId, PusherIdent) ->
+        lists:append(["/app/",PusherAppId,"?client=",PusherIdent,"&version=1.0&protocol=7"]).
 
 % @doc generate report topic
--spec generate_topic(State) -> Result when
-    State   :: erlpusher_state(),
-    Result  :: binary().
+-spec generate_topic_if_need(State) -> Result when
+    State       :: #erlpusher_state(),
+    Result      :: report_to().
 
-generate_topic(State = #erlpusher_state{report_topic = undefined}) ->
-    list_to_binary(atom_to_list(State#erlpusher_state.server)++".output");
-generate_topic(State) ->
-    State#erlpusher_state.report_topic.
+generate_topic_if_need(#erlpusher_state{report_to = 'erlroute', register = 'undefined'}) ->
+    {'erlroute', list_to_binary(pid_to_list(self())++".output")};
+generate_topic_if_need(#erlpusher_state{report_to = 'erlroute', register = {_Type, Server}}) when is_atom(Server) ->
+    {'erlroute', list_to_binary(atom_to_list(Server)++".output")};
+generate_topic_if_need(#erlpusher_state{report_to = 'erlroute', register = {'via', _Module, Server}}) when is_atom(Server) ->
+    {'erlroute', list_to_binary(atom_to_list(Server)++".output")};
+generate_topic_if_need(#erlpusher_state{report_to = ReportTo}) ->
+    ReportTo.
 
 % @doc send output
-send_output(_State = #erlpusher_state{report_to=erlroute, report_topic=Report_topic, server=Server}, Frame) ->
+-spec send_output(State) -> noreturn() when
+    State :: erlpusher_state().
+
+send_output(#erlpusher_state{report_to = 'undefined'}) -> ok;
+send_output(#erlpusher_state{report_to = {'erlroute', Report_topic}, register = 'undefined'}, Frame) ->
+    erlroute:pub(?MODULE, self(), ?LINE, Report_topic, Frame, 'hybrid', '$erlroute_cmp_erlpusher');
+send_output(#erlpusher_state{report_to = {'erlroute', Report_topic}, register = {_Type, Server}}, Frame) ->
+    erlroute:pub(?MODULE, Server, ?LINE, Report_topic, Frame, 'hybrid', '$erlroute_cmp_erlpusher');
+send_output(#erlpusher_state{report_to = {'erlroute', Report_topic}, register = {'via', _Module, Server}}, Frame) ->
     erlroute:pub(?MODULE, Server, ?LINE, Report_topic, Frame, 'hybrid', '$erlroute_cmp_erlpusher');
 send_output(_State = #erlpusher_state{report_to=ReportTo}, Frame) ->
     ReportTo ! Frame.
 
+% ------------------------ end of other private functions ----------------------
 
