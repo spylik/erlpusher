@@ -12,8 +12,7 @@ dep_erlroute = git https://github.com/spylik/erlroute master
 DEPS = gun 
 
 TEST_DEPS = lager teaser erlroute
-SHELL_DEPS += $(TEST_DEPS) 
-SHELL_DEPS += sync
+SHELL_DEPS = sync
 
 SHELL_OPTS = -config deps/teaser/sys.config +c true +C multi_time_warp -pa ebin/ test/ -eval 'lager:start(), mlibs:discover()' -env ERL_LIBS deps -run mlibs autotest_on_compile
 

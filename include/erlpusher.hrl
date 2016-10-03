@@ -26,7 +26,8 @@
         'pusher_ident' => pusher_ident(),
         'timeout_for_gun_ws_upgrade' => non_neg_integer(),
         'timeout_for_subscribtion' => non_neg_integer(),
-        'timeout_last_global_frame' => non_neg_integer()
+        'timeout_before_ping' => 'from_pusher' | non_neg_integer(),
+        'timeout_for_ping' => non_neg_integer()
     }.
 
 -record(erlpusher_state, {
@@ -38,12 +39,16 @@
         pusher_ident                :: pusher_ident(),   % identification of client
         timeout_for_gun_ws_upgrade  :: non_neg_integer(),% timeout for gun_ws_upgrade message
         timeout_for_subscribtion    :: non_neg_integer(),% timeout for get confirmation for subscribtion
-        timeout_last_global_frame   :: pos_integer(),    % timeout before we going to flush gun connection if haven't new messages
-        % erlpusher operations section  
+        timeout_before_ping         :: 'from_pusher' | non_neg_integer(),% timeout before we send ping message
+        timeout_for_ping            :: non_neg_integer(),% timeout for get ping message
+        % erlpusher operations section
+        timeout_before_ping_set     :: 'undefined' | pos_integer(),
+        timeout_last_global_frame   :: 'undefined' | pos_integer(),    % timeout before we going to flush gun connection if haven't new messages
         pusher_url                  :: 'undefined' | nonempty_list(),  % generated pusher url
         heartbeat_freq              :: 'undefined' | pos_integer(),    % min(timeout_for_gun_ws_upgrade, timeout_for_subscribtion, timeout_last_global_frame) 
         gun_pid                     :: 'undefined' | pid(),            % current gun connection Pid
         gun_mon_ref                 :: 'undefined' | reference(),      % current gun monitor refference
+        connected_since             :: 'undefined' | pos_integer(),    % connected since
         last_frame                  :: 'undefined' | pos_integer(),    % last frame timestamp
         heartbeat_tref              :: 'undefined' | reference()       % last heartbeat time refference
     }).

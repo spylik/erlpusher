@@ -1,6 +1,6 @@
 {application,erlpusher,
              [{description,"An Erlang gun-driven pusher.com client"},
-              {vsn,"0.1.5"},
+              {vsn,"0.1.6"},
               {id,"git"},
               {modules,[]},
               {registered,[erlpusher]},

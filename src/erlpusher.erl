@@ -14,9 +14,11 @@
 -endif.
 
 -include("erlpusher.hrl").
-%-include("deps/teaser/include/utils.hrl").
+-include("deps/teaser/include/utils.hrl").
 
 -behaviour(gen_server).
+
+-define(PingFrame, {text, <<"{\"event\": \"pusher:ping\"}">>}).
 
 % @doc export gen_server api
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -24,6 +26,7 @@
 
 % @doc export public api
 -export([
+        start_link/1,
         start_link/2,
         stop/1,
         stop/2
@@ -38,7 +41,16 @@
 
 % ============================ gen_server part =================================
 
-% @doc start api start_link/1 when Parameter #woodpecker_state{}.
+-spec start_link(PusherAppId) -> Result when
+    PusherAppId :: pusher_app_id(),
+    Result      :: {'ok',Pid} | 'ignore' | {'error',Error},
+    Pid         :: pid(),
+    Error       :: {'already_started',Pid} | term().
+
+start_link(PusherAppId) when is_list(PusherAppId) ->
+    start_link(PusherAppId, maps:new()).
+
+% @doc start api start_link/2 with parameters.
 -spec start_link(PusherAppId, Prop) -> Result when
     PusherAppId :: pusher_app_id(),
     Prop        :: start_prop(),
@@ -56,7 +68,8 @@ start_link(PusherAppId, Prop) when is_list(PusherAppId), is_map(Prop) ->
         'pusher_ident'  = maps:get('pusher_ident',  Prop, "erlpusher"),
         'timeout_for_gun_ws_upgrade' = maps:get('timeout_for_gun_ws_upgrade', Prop, 10000),
         'timeout_for_subscribtion'   = maps:get('timeout_for_subscribtion',   Prop, 10000),
-        'timeout_last_global_frame'  = maps:get('timeout_last_global_frame',  Prop, 10000)
+        'timeout_before_ping'        = maps:get('timeout_before_ping',        Prop, 'from_pusher'),
+        'timeout_for_ping'           = maps:get('timeout_for_ping',           Prop, 10000)
     },
     case Register =:= 'undefined' of
         true -> 
@@ -97,14 +110,23 @@ init(State = #erlpusher_state{
         pusher_ident = PusherIdent,
         timeout_for_gun_ws_upgrade = Timeout_for_gun_ws_upgrade,
         timeout_for_subscribtion = Timeout_for_subscribtion,
-        timeout_last_global_frame = Timeout_last_global_frame
+        timeout_before_ping = Timeout_before_ping,
+        timeout_for_ping = Timeout_for_ping
     }) ->
     HeartBeatFreq = lists:min([
-            Timeout_for_gun_ws_upgrade,
-            Timeout_for_subscribtion,
-            Timeout_last_global_frame
-        ]),
+        Timeout_for_gun_ws_upgrade,
+        Timeout_for_subscribtion,
+        Timeout_for_ping
+    ]),
+    {TimeoutLastGlobalFrame, SetTimeoutForPing} = case Timeout_before_ping of 
+        'from_pusher' -> 
+            {'undefined', 'undefined'};
+        _ -> 
+            {Timeout_before_ping + Timeout_for_ping, Timeout_for_ping}
+    end,
     NewState = may_need_connect(State#erlpusher_state{
+            timeout_last_global_frame = TimeoutLastGlobalFrame,
+            timeout_before_ping_set = SetTimeoutForPing,
             heartbeat_freq = HeartBeatFreq,
             pusher_url = generate_url(PusherAppId,PusherIdent),
             report_to = generate_topic_if_need(State)
@@ -132,7 +154,7 @@ handle_cast({'subscribe', Channel}, State) ->
 % @doc send ping to remote
 handle_cast('ping', State) ->
     NewState = may_need_connect(State),
-    send(NewState, {text, <<"{\"event\": \"pusher:ping\"}">>}),
+    send(NewState, ?PingFrame),
     {noreply, NewState};
 
 % handle_cast for all other thigs
@@ -151,13 +173,30 @@ handle_info('heartbeat', State = #erlpusher_state{
     }) ->
     _ = erlang:cancel_timer(Heartbeat_tref),
     NewState = may_need_connect(State),
+    may_need_send_ping(NewState),
     TRef = erlang:send_after(Heartbeat_freq, self(), heartbeat),
     {noreply, NewState#erlpusher_state{heartbeat_tref=TRef}};
 
-% @doc connection established
+% @doc connection established when timeout_before_ping = 'from_pusher'
+handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher:connection_established\"", _Rest/binary>> = Frame}}, State = #erlpusher_state{timeout_before_ping = 'from_pusher', timeout_for_ping = Timeout_for_ping}) ->
+    NewState = subscribe(State, 'all'),
+    [_, TimeoutHere] = binary:split(Frame, <<"\\\"activity_timeout\\\":">>),
+    [TimeOut] = binary:split(TimeoutHere, <<"}\"}">>, [trim]),
+    TimeoutMS = erlang:convert_time_unit(binary_to_integer(TimeOut), seconds, milli_seconds),
+    {noreply, NewState#erlpusher_state{
+            last_frame = get_time(),
+            timeout_before_ping_set = TimeoutMS,
+            timeout_last_global_frame = TimeoutMS+Timeout_for_ping
+        }
+    };
+
+% @doc connection established when have timeout_before_ping
 handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher:connection_established\"", _Rest/binary>>}}, State) ->
     NewState = subscribe(State, 'all'),
-    {noreply, NewState#erlpusher_state{last_frame=get_time()}};
+    {noreply, NewState#erlpusher_state{
+            last_frame=get_time()
+        }
+    };
 
 % @doc subscribed to channel
 handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher_internal:subscription_succeeded\",\"data\":\"{}\",\"channel\":\"", ChannelHere/binary>>}}, State = #erlpusher_state{channels = Channels}) ->
@@ -169,6 +208,9 @@ handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher_internal:subscrip
             channels = Channels#{Channel := ChannelData#channel_prop{status = 'connected', get_sub_confirm = Time, last_frame = Time}}
         }
     };
+
+handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher:pong\",\"data\":\"{}\"}">>}}, State) ->
+    {noreply, State#erlpusher_state{last_frame = get_time()}};
 
 % @doc pusher data frame
 handle_info({'gun_ws', _ConnPid, {text, Frame}}, State = #erlpusher_state{
@@ -257,8 +299,12 @@ code_change(_OldVsn, State, _Extra) ->
 
 may_need_connect(State = #erlpusher_state{gun_pid = 'undefined'}) ->
     connect(State);
-may_need_connect(State = #erlpusher_state{last_frame = LastFrame, gun_pid = GunPid}) when is_integer(LastFrame) ->
-    case get_time() - LastFrame > State#erlpusher_state.timeout_last_global_frame of
+may_need_connect(State = #erlpusher_state{
+        last_frame = LastFrame,
+        gun_pid = GunPid,
+        timeout_last_global_frame = Timeout_last_global_frame
+        }) when is_integer(LastFrame), is_integer(Timeout_last_global_frame) ->
+    case get_time() - LastFrame > Timeout_last_global_frame of
         true ->
             connect(flush_gun(State, GunPid));
         false ->
@@ -266,6 +312,26 @@ may_need_connect(State = #erlpusher_state{last_frame = LastFrame, gun_pid = GunP
     end;
 may_need_connect(State) ->
     State.
+
+-spec may_need_send_ping(State) -> boolean() when
+    State :: erlpusher_state().
+
+may_need_send_ping(#erlpusher_state{gun_pid = 'undefined'}) -> false;
+may_need_send_ping(#erlpusher_state{last_frame = 'undefined'}) -> false;
+may_need_send_ping(#erlpusher_state{
+        last_frame = LastFrame,
+        connected_since = Connected_since,
+        timeout_before_ping_set = Timeout_before_ping_set} = State) ->
+    Time = get_time(),
+    Online = Time - Connected_since,
+    Expired = Time - LastFrame,
+    case Online > Timeout_before_ping_set of
+        true when Expired > Timeout_before_ping_set ->
+            send(State, ?PingFrame),
+            true;
+        _ ->
+            false
+    end.
 
 % @doc connect
 -spec connect(State) -> Result when
@@ -285,7 +351,7 @@ connect(State = #erlpusher_state{
             receive
                 {'gun_ws_upgrade', Pid, ok, _} ->
                     error_logger:info_msg("Erlpusher ~p got gun_ws_upgrade",[Pid]),
-                    State#erlpusher_state{gun_pid=Pid, gun_mon_ref=GunMonRef}
+                    State#erlpusher_state{gun_pid=Pid, gun_mon_ref=GunMonRef, connected_since = get_time()}
             after Timeout_for_gun_ws_upgrade ->
                 error_logger:warning_msg("Erlpusher ~p got timeout_for_gun_ws_upgrade",[Pid]),
                 flush_gun(State, Pid)
@@ -348,6 +414,7 @@ subscribe(State = #erlpusher_state{channels = Channels}, Channel) when is_binary
 send(#erlpusher_state{gun_pid = 'undefined'}, _Frame) -> 
     false;
 send(#erlpusher_state{gun_pid = GunPid}, Frame) ->
+    error_logger:info_msg("Sending ~p",[Frame]),
     gun:ws_send(GunPid, Frame),
     true.
 
@@ -382,11 +449,12 @@ flush_gun(State = #erlpusher_state{gun_mon_ref = Gun_mon_ref, gun_pid = Gun_pid}
     State   :: erlpusher_state(),
     Result  :: erlpusher_state().
 
-flush_state(State = #erlpusher_state{channels = Channels}) ->
-    State#erlpusher_state{
+flush_state(State = #erlpusher_state{channels = Channels, timeout_before_ping = Timeout_before_ping}) ->
+    NewState = State#erlpusher_state{
         last_frame = 'undefined',
         gun_pid = 'undefined',
         gun_mon_ref = 'undefined',
+        connected_since = 'undefined',
         channels = maps:map(
             fun 
                 % change state for channels with status 'casted' and 'connected'. 
@@ -398,8 +466,16 @@ flush_state(State = #erlpusher_state{channels = Channels}) ->
                 (_Channel, ChannelProp) -> 
                     ChannelProp
             end, Channels
-    )}. 
-
+    )},
+    case Timeout_before_ping of
+        'from_pusher' ->
+            NewState#erlpusher_state{
+                timeout_last_global_frame = 'undefined',
+                timeout_before_ping_set = 'undefined'
+            };
+        _ ->
+            NewState
+    end.
 
 % @doc get time
 -spec get_time() -> Result when
