@@ -1,12 +1,7 @@
-{application, erlpusher, [
-    {description, "An Erlang pusher.com client driven by Gun"},
-    {vsn, "0.1.0"},
-    {id, "git"},
-    {modules, []},
-    {registered, [erlpusher]},
-    {applications, [
-        kernel, 
-        stdlib, 
-        gun
-    ]}
-]}.
+{application,erlpusher,
+             [{description,"An Erlang gun-driven pusher.com client"},
+              {vsn,"0.1.7"},
+              {id,"git"},
+              {modules,[]},
+              {registered,[erlpusher]},
+              {applications,[kernel,stdlib,gun]}]}.

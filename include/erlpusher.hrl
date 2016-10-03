@@ -1,19 +1,62 @@
-%% - need specify by user
+-type channel_status()          :: 'toconnect' | 'casted' | 'connected' | 'errored'.
+-type channel()                 :: binary().
+
+-record(channel_prop, {
+        status = 'toconnect'    :: channel_status(),
+        created                 :: pos_integer(),
+        cast_sub                :: 'undefined' | pos_integer(),
+        get_sub_confirm         :: 'undefined' | pos_integer(),
+        last_frame              :: 'undefined' | pos_integer()
+    }).
+-type channel_prop()            :: #channel_prop{}.
+
+-type channels()                :: #{} | #{channel() => channel_prop()}.
+-type pusher_app_id()           :: nonempty_list().
+-type register_as()             :: 'undefined' |            % register option: do not register
+                                   {'local', atom()} |      % register option: locally
+                                   {'global',term()} |      % register option: globally)
+                                   {'via',module(),term()}. % register option: via module,name
+-type pusher_ident()            :: nonempty_list().
+-type report_to()               :: 'undefined' | atom() | pid() | 'erlroute' | {'erlroute', binary()}.
+
+-type start_prop() :: #{
+        'register' => register_as(),
+        'channels' => channels(),
+        'report_to' => report_to(),
+        'pusher_ident' => pusher_ident(),
+        'timeout_for_gun_ws_upgrade' => non_neg_integer(),
+        'timeout_for_subscribtion' => non_neg_integer(),
+        'timeout_before_ping' => 'from_pusher' | non_neg_integer(),
+        'timeout_for_ping' => non_neg_integer()
+    }.
+
 -record(erlpusher_state, {
         % user specification section
-        server,                                      % moderate: servername
-        pusher_app_id,                               % moderate: pusher_app_id
-        channels,                                    % moderate: channel for subscribe
-        report_to,                                   % send output frames to pid or erlroute
-        report_topic,                                % generated or predefined output topic for erlyroute
-        pusher_ident = "erlpusher",                  % identification of client
-        timeout_for_gun_ws_upgrade = 10000,          % timeout for gun_ws_upgrade message
-        noreceive_ttl = 60000,                       % timeout before we going to flush gun connection if haven't new messages
-        heartbeat_freq = 1000,                       % heartbeat frequency (in milliseconds) 
-        % pusher_client operations section
-        pusher_url,                                  % generated pusher url
-        gun_pid,                                     % current gun connection Pid
-        gun_ref,                                     % current gun monitor refference
-        last_frame,                                  % last frame timestamp
-        heartbeat_tref                               % last heartbeat time refference
+        pusher_app_id               :: pusher_app_id(),  % moderate: pusher_app_id
+        register                    :: register_as(),    % register or do not register erlpusher process as
+        channels                    :: channels(),       % channel list (some channels can be predefined)
+        report_to                   :: report_to(),      % where output output will be sended 
+        pusher_ident                :: pusher_ident(),   % identification of client
+        timeout_for_gun_ws_upgrade  :: non_neg_integer(),% timeout for gun_ws_upgrade message
+        timeout_for_subscribtion    :: non_neg_integer(),% timeout for get confirmation for subscribtion
+        timeout_before_ping         :: 'from_pusher' | non_neg_integer(),% timeout before we send ping message
+        timeout_for_ping            :: non_neg_integer(),% timeout for get ping message
+        % erlpusher operations section
+        timeout_before_ping_set     :: 'undefined' | pos_integer(),
+        timeout_last_global_frame   :: 'undefined' | pos_integer(),    % timeout before we going to flush gun connection if haven't new messages
+        pusher_url                  :: 'undefined' | nonempty_list(),  % generated pusher url
+        heartbeat_freq              :: 'undefined' | pos_integer(),    % min(timeout_for_gun_ws_upgrade, timeout_for_subscribtion, timeout_last_global_frame) 
+        gun_pid                     :: 'undefined' | pid(),            % current gun connection Pid
+        gun_mon_ref                 :: 'undefined' | reference(),      % current gun monitor refference
+        connected_since             :: 'undefined' | pos_integer(),    % connected since
+        last_frame                  :: 'undefined' | pos_integer(),    % last frame timestamp
+        heartbeat_tref              :: 'undefined' | reference()       % last heartbeat time refference
     }).
+-type erlpusher_state() :: #erlpusher_state{}.
+
+-record(erlpusher_frame, {
+        app_id          :: nonempty_list(),
+        channel         :: channel(), 
+        frame           :: binary()
+    }).
+-type erlpusher_frame() :: #erlpusher_frame{}.
