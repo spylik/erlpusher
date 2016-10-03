@@ -219,7 +219,7 @@ handle_info({'gun_ws', _ConnPid, {text, Frame}}, State = #erlpusher_state{
     }) ->
     Time = get_time(),
     [_, Channel] = binary:split(Frame,[<<"channel\":\"">>,<<"\"}">>],[global,trim]),
-    send_output(State, #erlpusher_frame{app_id = PusherAppId, channel = Channel, frame = Frame}),
+    send_output(State, #erlpusher_frame{app_id = PusherAppId, channel = Channel, data = Frame}),
     ChannelData = maps:get(Channel, Channels),
     {noreply, State#erlpusher_state{
             last_frame=get_time(),

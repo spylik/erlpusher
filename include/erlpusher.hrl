@@ -57,6 +57,6 @@
 -record(erlpusher_frame, {
         app_id          :: nonempty_list(),
         channel         :: channel(), 
-        frame           :: binary()
+        data           :: binary()
     }).
 -type erlpusher_frame() :: #erlpusher_frame{}.
