@@ -14,7 +14,7 @@
 -endif.
 
 -include("erlpusher.hrl").
--include("deps/teaser/include/utils.hrl").
+%-include("deps/teaser/include/utils.hrl").
 
 -behaviour(gen_server).
 
@@ -69,7 +69,7 @@ start_link(PusherAppId, Prop) when is_list(PusherAppId), is_map(Prop) ->
         'timeout_for_gun_ws_upgrade' = maps:get('timeout_for_gun_ws_upgrade', Prop, 10000),
         'timeout_for_subscribtion'   = maps:get('timeout_for_subscribtion',   Prop, 10000),
         'timeout_before_ping'        = maps:get('timeout_before_ping',        Prop, 'from_pusher'),
-        'timeout_for_ping'           = maps:get('timeout_for_ping',           Prop, 10000)
+        'timeout_for_ping'           = maps:get('timeout_for_ping',           Prop, 30000)
     },
     case Register =:= 'undefined' of
         true -> 
@@ -118,15 +118,15 @@ init(State = #erlpusher_state{
         Timeout_for_subscribtion,
         Timeout_for_ping
     ]),
-    {TimeoutLastGlobalFrame, SetTimeoutForPing} = case Timeout_before_ping of 
+    {TimeoutLastGlobalFrame, SetTimeoutBeforePing} = case Timeout_before_ping of 
         'from_pusher' -> 
             {'undefined', 'undefined'};
         _ -> 
-            {Timeout_before_ping + Timeout_for_ping, Timeout_for_ping}
+            {Timeout_before_ping + Timeout_for_ping, Timeout_before_ping}
     end,
     NewState = may_need_connect(State#erlpusher_state{
             timeout_last_global_frame = TimeoutLastGlobalFrame,
-            timeout_before_ping_set = SetTimeoutForPing,
+            timeout_before_ping_set = SetTimeoutBeforePing,
             heartbeat_freq = HeartBeatFreq,
             pusher_url = generate_url(PusherAppId,PusherIdent),
             report_to = generate_topic_if_need(State)
