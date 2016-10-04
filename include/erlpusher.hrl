@@ -21,7 +21,7 @@
 
 -type start_prop() :: #{
         'register' => register_as(),
-        'channels' => channels(),
+        'channels' => [channel()],
         'report_to' => report_to(),
         'pusher_ident' => pusher_ident(),
         'timeout_for_gun_ws_upgrade' => non_neg_integer(),
@@ -57,6 +57,6 @@
 -record(erlpusher_frame, {
         app_id          :: nonempty_list(),
         channel         :: channel(), 
-        frame           :: binary()
+        data           :: binary()
     }).
 -type erlpusher_frame() :: #erlpusher_frame{}.
