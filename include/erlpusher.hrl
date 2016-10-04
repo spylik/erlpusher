@@ -24,6 +24,7 @@
         'channels' => [channel()],
         'report_to' => report_to(),
         'pusher_ident' => pusher_ident(),
+        'heartbeat_freq' => non_neg_integer(),
         'timeout_for_gun_ws_upgrade' => non_neg_integer(),
         'timeout_for_subscribtion' => non_neg_integer(),
         'timeout_before_ping' => 'from_pusher' | non_neg_integer(),

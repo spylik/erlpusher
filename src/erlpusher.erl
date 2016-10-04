@@ -64,11 +64,12 @@ start_link(PusherAppId, Prop) when is_list(PusherAppId), is_map(Prop) ->
     {_, Channels} = lists:mapfoldl(fun(Key,Acc) -> {ok, Acc#{Key => #channel_prop{created = Time}}} end, #{}, 
         maps:get('channels', Prop, [])),
     InitState = #erlpusher_state{
-        'pusher_app_id' = PusherAppId,
-        'register'      = Register,
-        'channels'      = Channels,
-        'report_to'     = maps:get('report_to',     Prop, self()),
-        'pusher_ident'  = maps:get('pusher_ident',  Prop, "erlpusher"),
+        'pusher_app_id'  = PusherAppId,
+        'register'       = Register,
+        'channels'       = Channels,
+        'report_to'      = maps:get('report_to',      Prop, self()),
+        'pusher_ident'   = maps:get('pusher_ident',   Prop, "erlpusher"),
+        'heartbeat_freq' = maps:get('heartbeat_freq', Prop, 1000),
         'timeout_for_gun_ws_upgrade' = maps:get('timeout_for_gun_ws_upgrade', Prop, 10000),
         'timeout_for_subscribtion'   = maps:get('timeout_for_subscribtion',   Prop, 10000),
         'timeout_before_ping'        = maps:get('timeout_before_ping',        Prop, 'from_pusher'),
@@ -111,16 +112,10 @@ stop('async', Server) ->
 init(State = #erlpusher_state{
         pusher_app_id = PusherAppId,
         pusher_ident = PusherIdent,
-        timeout_for_gun_ws_upgrade = Timeout_for_gun_ws_upgrade,
-        timeout_for_subscribtion = Timeout_for_subscribtion,
+        heartbeat_freq = Heartbeat_freq,
         timeout_before_ping = Timeout_before_ping,
         timeout_for_ping = Timeout_for_ping
     }) ->
-    HeartBeatFreq = lists:min([
-        Timeout_for_gun_ws_upgrade,
-        Timeout_for_subscribtion,
-        Timeout_for_ping
-    ]),
     {TimeoutLastGlobalFrame, SetTimeoutBeforePing} = case Timeout_before_ping of 
         'from_pusher' -> 
             {'undefined', 'undefined'};
@@ -130,11 +125,10 @@ init(State = #erlpusher_state{
     NewState = may_need_connect(State#erlpusher_state{
             timeout_last_global_frame = TimeoutLastGlobalFrame,
             timeout_before_ping_set = SetTimeoutBeforePing,
-            heartbeat_freq = HeartBeatFreq,
             pusher_url = generate_url(PusherAppId,PusherIdent),
             report_to = generate_topic_if_need(State)
         }),
-    TRef = erlang:send_after(HeartBeatFreq, self(), 'heartbeat'),
+    TRef = erlang:send_after(Heartbeat_freq, self(), 'heartbeat'),
     {ok,
         NewState#erlpusher_state{
             heartbeat_tref = TRef
