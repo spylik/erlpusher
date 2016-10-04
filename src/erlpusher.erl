@@ -60,10 +60,13 @@ start_link(PusherAppId) when is_list(PusherAppId) ->
 
 start_link(PusherAppId, Prop) when is_list(PusherAppId), is_map(Prop) ->
     Register = maps:get('register', Prop, 'undefined'),
+    Time = get_time(),
+    {_, Channels} = lists:mapfoldl(fun(Key,Acc) -> {ok, Acc#{Key => #channel_prop{created = Time}}} end, #{}, 
+        maps:get('channels', Prop, [])),
     InitState = #erlpusher_state{
         'pusher_app_id' = PusherAppId,
         'register'      = Register,
-        'channels'      = maps:get('channels',      Prop, #{}),
+        'channels'      = Channels,
         'report_to'     = maps:get('report_to',     Prop, self()),
         'pusher_ident'  = maps:get('pusher_ident',  Prop, "erlpusher"),
         'timeout_for_gun_ws_upgrade' = maps:get('timeout_for_gun_ws_upgrade', Prop, 10000),

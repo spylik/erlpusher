@@ -21,7 +21,7 @@
 
 -type start_prop() :: #{
         'register' => register_as(),
-        'channels' => channels(),
+        'channels' => [channel()],
         'report_to' => report_to(),
         'pusher_ident' => pusher_ident(),
         'timeout_for_gun_ws_upgrade' => non_neg_integer(),
