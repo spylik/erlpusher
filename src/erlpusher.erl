@@ -411,7 +411,6 @@ subscribe(State = #erlpusher_state{channels = Channels}, Channel) when is_binary
 send(#erlpusher_state{gun_pid = 'undefined'}, _Frame) -> 
     false;
 send(#erlpusher_state{gun_pid = GunPid}, Frame) ->
-    error_logger:info_msg("Sending ~p",[Frame]),
     gun:ws_send(GunPid, Frame),
     true.
 
