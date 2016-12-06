@@ -136,15 +136,29 @@ init(State = #erlpusher_state{
 
 %--------------handle_call-----------------
 
-% handle_call for all other thigs
+% @doc handle_call for all other thigs
+-spec handle_call(Message, From, State) -> Result when
+    Message :: term(),
+    From    :: {pid(), Tag},
+    Tag     :: term(),
+    State   :: erlpusher_state(),
+    Result  :: {reply, 'ok', State}.
+
 handle_call(Msg, _From, State) ->
     error_logger:warning_msg("we are in undefined handle_call with message ~p\n",[Msg]),
-    {reply, ok, State}.
+    {reply, 'ok', State}.
 %-----------end of handle_call-------------
 
 %--------------handle_cast-----------------
 
 % @doc handle cast for subscribe
+
+-spec handle_cast(Message, State) -> Result when
+    Message         :: SubscribeMsg | 'ping',
+    SubscribeMsg    :: {'subscribe', binary()},
+    State           :: erlpusher_state(),
+    Result          :: {noreply, State} | {stop, normal, State}.
+
 handle_cast({'subscribe', Channel}, State) ->
     {noreply, subscribe(State, Channel)};
 
@@ -162,6 +176,13 @@ handle_cast(Msg, State) ->
 
 
 %--------------handle_info-----------------
+
+% @doc callbacks for gen_server handle_info.
+-spec handle_info(Message, State) -> Result when
+    Message :: 'heartbeat' | gun_ws() | gun_error() | down(),
+    State   :: erlpusher_state(),
+    Result  :: {noreply, State}.
+
 
 % @doc hearbeat for find and recovery dead connection
 handle_info('heartbeat', State = #erlpusher_state{
