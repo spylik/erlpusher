@@ -19,6 +19,13 @@
 -type pusher_ident()            :: nonempty_list().
 -type report_to()               :: 'undefined' | atom() | pid() | 'erlroute' | {'erlroute', binary()}.
 
+-type gun_pid()         :: pid().
+-type mon_ref()         :: reference().
+-type stream_ref()      :: reference().
+-type gun_ws()          :: {'gun_ws', gun_pid(), {'text', binary()}}.
+-type gun_error()       :: {'gun_error', gun_pid(), stream_ref(), term()} | {'gun_error', gun_pid(), term()}.
+-type down()            :: {'DOWN', mon_ref(), 'process', stream_ref(), term()}.
+
 -type start_prop() :: #{
         'register' => register_as(),
         'channels' => [channel()],
