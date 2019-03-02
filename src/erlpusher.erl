@@ -59,24 +59,39 @@ start_link(PusherAppId) when is_list(PusherAppId) ->
     Error       :: {'already_started',Pid} | term().
 
 start_link(PusherAppId, Prop) when is_list(PusherAppId), is_map(Prop) ->
-    Register = maps:get('register', Prop, 'undefined'),
     Time = get_time(),
-    {_, Channels} = lists:mapfoldl(fun(Key,Acc) -> {ok, Acc#{Key => #channel_prop{created = Time}}} end, #{}, 
+
+    Register = maps:get('register', Prop, 'undefined'),
+    TimeoutBeforePing = maps:get('timeout_before_ping', Prop, 'from_pusher'),
+    TimeoutForPing = maps:get('timeout_for_ping', Prop, 30000),
+    PusherIdent = maps:get('pusher_ident', Prop, "erlpusher"),
+    {TimeoutLastGlobalFrame, SetTimeoutBeforePing} = case TimeoutBeforePing of
+        'from_pusher' ->
+            {'undefined', 'undefined'};
+        _ ->
+            {TimeoutBeforePing + TimeoutForPing, TimeoutBeforePing}
+    end,
+
+    {_, Channels} = lists:mapfoldl(fun(Key,Acc) -> {ok, Acc#{Key => #channel_prop{created = Time}}} end, #{},
         maps:get('channels', Prop, [])),
     InitState = #erlpusher_state{
-        'pusher_app_id'  = PusherAppId,
-        'register'       = Register,
-        'channels'       = Channels,
-        'report_to'      = maps:get('report_to',      Prop, self()),
-        'pusher_ident'   = maps:get('pusher_ident',   Prop, "erlpusher"),
+        'pusher_app_id'= PusherAppId,
+        'register' = Register,
+        'channels' = Channels,
+        'report_to' = maps:get('report_to', Prop, self()),
+        'pusher_ident' = PusherIdent,
+        'pusher_url' = generate_url(PusherAppId, PusherIdent),
         'heartbeat_freq' = maps:get('heartbeat_freq', Prop, 1000),
+        'timeout_for_ping' = TimeoutForPing,
         'timeout_for_gun_ws_upgrade' = maps:get('timeout_for_gun_ws_upgrade', Prop, 10000),
-        'timeout_for_subscribtion'   = maps:get('timeout_for_subscribtion',   Prop, 10000),
-        'timeout_before_ping'        = maps:get('timeout_before_ping',        Prop, 'from_pusher'),
-        'timeout_for_ping'           = maps:get('timeout_for_ping',           Prop, 30000)
+        'timeout_for_subscribtion' = maps:get('timeout_for_subscribtion', Prop, 10000),
+        'timeout_before_ping' = TimeoutBeforePing,
+        'timeout_before_ping_set' = SetTimeoutBeforePing,
+        'timeout_last_global_frame' = TimeoutLastGlobalFrame
+
     },
     case Register =:= 'undefined' of
-        true -> 
+        true ->
             gen_server:start_link(?MODULE, InitState, []);
         false ->
             gen_server:start_link(Register, ?MODULE, InitState, [])
@@ -109,30 +124,10 @@ stop('async', Server) ->
     NState  :: erlpusher_state().
 
 % @doc main init
-init(State = #erlpusher_state{
-        pusher_app_id = PusherAppId,
-        pusher_ident = PusherIdent,
-        heartbeat_freq = Heartbeat_freq,
-        timeout_before_ping = Timeout_before_ping,
-        timeout_for_ping = Timeout_for_ping
-    }) ->
-    {TimeoutLastGlobalFrame, SetTimeoutBeforePing} = case Timeout_before_ping of 
-        'from_pusher' -> 
-            {'undefined', 'undefined'};
-        _ -> 
-            {Timeout_before_ping + Timeout_for_ping, Timeout_before_ping}
-    end,
-    NewState = may_need_connect(State#erlpusher_state{
-            timeout_last_global_frame = TimeoutLastGlobalFrame,
-            timeout_before_ping_set = SetTimeoutBeforePing,
-            pusher_url = generate_url(PusherAppId,PusherIdent),
-            report_to = generate_topic_if_need(State)
-        }),
+init(State = #erlpusher_state{heartbeat_freq = Heartbeat_freq}) ->
+    self() ! 'heartbeat',
     TRef = erlang:send_after(Heartbeat_freq, self(), 'heartbeat'),
-    {ok,
-        NewState#erlpusher_state{
-            heartbeat_tref = TRef
-        }}.
+    {ok, State#erlpusher_state{heartbeat_tref = TRef, report_to = generate_topic_if_need(State)}}.
 
 %--------------handle_call-----------------
 
@@ -244,7 +239,7 @@ handle_info({'gun_ws', _ConnPid, {text, Frame}}, State = #erlpusher_state{
             channels = Channels#{Channel := ChannelData#channel_prop{last_frame = Time}}
         }
     };
-    
+
 %% ---- close and other events bringing gun to flush ---- %%
 
 % @doc gun_ws close
@@ -357,7 +352,7 @@ may_need_send_ping(#erlpusher_state{
     Result  :: erlpusher_state().
 
 connect(State = #erlpusher_state{
-        pusher_url = Pusher_url, 
+        pusher_url = Pusher_url,
         timeout_for_gun_ws_upgrade = Timeout_for_gun_ws_upgrade}) ->
     error_logger:info_msg("Erlpusher trying connect with state ~p", [State]),
     {ok, Pid} = gun:open("wss.pusherapp.com", 443, #{retry=>0}),
@@ -389,7 +384,7 @@ subscribe(State = #erlpusher_state{channels = Channels, timeout_for_subscribtion
     Time = get_time(),
     NewState = may_need_connect(State),
     NewState#erlpusher_state{channels = maps:map(
-        fun 
+        fun
             % cast connect for channels with status 'toconnect'
             (Channel, #channel_prop{status = 'toconnect'} = ChannelProp) ->
             case send(NewState, {text, <<"{\"event\": \"pusher:subscribe\", \"data\": {\"channel\": \"", Channel/binary, "\"} }">>}) of
@@ -413,9 +408,9 @@ subscribe(State = #erlpusher_state{channels = Channels}, Channel) when is_binary
         false ->
             NewState = may_need_connect(State),
             case send(NewState, {text, <<"{\"event\": \"pusher:subscribe\", \"data\": {\"channel\": \"", Channel/binary, "\"} }">>}) of
-                true -> 
+                true ->
                     NewState#erlpusher_state{channels = Channels#{Channel => #channel_prop{status = 'casted', created = Time, cast_sub = Time}}};
-                false -> 
+                false ->
                     NewState#erlpusher_state{channels = Channels#{Channel => #channel_prop{status = 'toconnect', created = Time}}}
             end;
         true ->
@@ -429,7 +424,7 @@ subscribe(State = #erlpusher_state{channels = Channels}, Channel) when is_binary
     Frame :: {'text', binary()},
     Result :: boolean().
 
-send(#erlpusher_state{gun_pid = 'undefined'}, _Frame) -> 
+send(#erlpusher_state{gun_pid = 'undefined'}, _Frame) ->
     false;
 send(#erlpusher_state{gun_pid = GunPid}, Frame) ->
     gun:ws_send(GunPid, Frame),
@@ -450,7 +445,7 @@ flush_gun(State = #erlpusher_state{gun_mon_ref = Gun_mon_ref, gun_pid = Gun_pid}
         true ->
             State;
         false when Gun_pid =:= 'undefined' ->
-            gun:close(ConnRef), 
+            gun:close(ConnRef),
             State;
         false when Gun_pid =:= ConnRef ->
             demonitor(Gun_mon_ref, [flush]),
@@ -473,14 +468,14 @@ flush_state(State = #erlpusher_state{channels = Channels, timeout_before_ping = 
         gun_mon_ref = 'undefined',
         connected_since = 'undefined',
         channels = maps:map(
-            fun 
-                % change state for channels with status 'casted' and 'connected'. 
+            fun
+                % change state for channels with status 'casted' and 'connected'.
                 (_Channel, #channel_prop{status = 'casted'} = ChannelProp) ->
                     ChannelProp#channel_prop{status = 'toconnect', cast_sub = 'undefined', get_sub_confirm = 'undefined'};
                 (_Channel, #channel_prop{status = 'connected'} = ChannelProp) ->
                     ChannelProp#channel_prop{status = 'toconnect', cast_sub = 'undefined', get_sub_confirm = 'undefined'};
                 % for rest, do nothing
-                (_Channel, ChannelProp) -> 
+                (_Channel, ChannelProp) ->
                     ChannelProp
             end, Channels
     )},
