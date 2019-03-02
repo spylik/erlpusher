@@ -191,7 +191,7 @@ handle_info('heartbeat', State = #erlpusher_state{
     {noreply, NewState#erlpusher_state{heartbeat_tref=TRef}};
 
 % @doc connection established when timeout_before_ping = 'from_pusher'
-handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher:connection_established\"", _Rest/binary>> = Frame}}, State = #erlpusher_state{timeout_before_ping = 'from_pusher', timeout_for_ping = Timeout_for_ping}) ->
+handle_info({'gun_ws', _ConnPid, _StreamRef, {text, <<"{\"event\":\"pusher:connection_established\"", _Rest/binary>> = Frame}}, State = #erlpusher_state{timeout_before_ping = 'from_pusher', timeout_for_ping = Timeout_for_ping}) ->
     NewState = subscribe(State, 'all'),
     [_, TimeoutHere] = binary:split(Frame, <<"\\\"activity_timeout\\\":">>),
     [TimeOut] = binary:split(TimeoutHere, <<"}\"}">>, [trim]),
@@ -204,7 +204,7 @@ handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher:connection_establ
     };
 
 % @doc connection established when have timeout_before_ping
-handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher:connection_established\"", _Rest/binary>>}}, State) ->
+handle_info({'gun_ws', _ConnPid, _StreamRef, {text, <<"{\"event\":\"pusher:connection_established\"", _Rest/binary>>}}, State) ->
     NewState = subscribe(State, 'all'),
     {noreply, NewState#erlpusher_state{
             last_frame=get_time()
@@ -212,7 +212,7 @@ handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher:connection_establ
     };
 
 % @doc subscribed to channel
-handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher_internal:subscription_succeeded\",\"data\":\"{}\",\"channel\":\"", ChannelHere/binary>>}}, State = #erlpusher_state{channels = Channels}) ->
+handle_info({'gun_ws', _ConnPid, _StreamRef, {text, <<"{\"event\":\"pusher_internal:subscription_succeeded\",\"data\":\"{}\",\"channel\":\"", ChannelHere/binary>>}}, State = #erlpusher_state{channels = Channels}) ->
     Time = get_time(),
     [Channel] = binary:split(ChannelHere, <<"\"}">>, [trim]),
     ChannelData = maps:get(Channel, Channels),
@@ -222,11 +222,11 @@ handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher_internal:subscrip
         }
     };
 
-handle_info({'gun_ws', _ConnPid, {text, <<"{\"event\":\"pusher:pong\",\"data\":\"{}\"}">>}}, State) ->
+handle_info({'gun_ws', _ConnPid, _StreamRef, {text, <<"{\"event\":\"pusher:pong\",\"data\":\"{}\"}">>}}, State) ->
     {noreply, State#erlpusher_state{last_frame = get_time()}};
 
 % @doc pusher data frame
-handle_info({'gun_ws', _ConnPid, {text, Frame}}, State = #erlpusher_state{
+handle_info({'gun_ws', _ConnPid, _StreamRef, {text, Frame}}, State = #erlpusher_state{
         pusher_app_id = PusherAppId,
         channels = Channels
     }) ->
@@ -243,12 +243,12 @@ handle_info({'gun_ws', _ConnPid, {text, Frame}}, State = #erlpusher_state{
 %% ---- close and other events bringing gun to flush ---- %%
 
 % @doc gun_ws close
-handle_info({'gun_ws', ConnPid, 'close'}, State) ->
+handle_info({'gun_ws', ConnPid, _StreamRef, 'close'}, State) ->
     gun:ws_send(ConnPid, 'close'),
     {noreply, flush_gun(State, ConnPid)};
 
 % @doc gun_ws close with code
-handle_info({'gun_ws', ConnPid, {'close', Code, _}}, State) ->
+handle_info({'gun_ws', ConnPid, _StreamRef, {'close', Code, _}}, State) ->
     gun:ws_send(ConnPid, {'close', Code, <<>>}),
     {noreply, flush_gun(State, ConnPid)};
 
@@ -271,7 +271,7 @@ handle_info({'DOWN', MonRef, 'process', ConnPid, Reason}, State) ->
     {noreply, flush_gun(State, ConnPid)};
 
 % @doc unknown gun_ws frame
-handle_info({'gun_ws', _ConnPid, Frame}, State) ->
+handle_info({'gun_ws', _ConnPid, _StreamRef, Frame}, State) ->
     error_logger:warning_msg("got non-text gun_ws event with Frame ~p", [Frame]),
     {noreply, State};
 
@@ -362,7 +362,7 @@ connect(State = #erlpusher_state{
             error_logger:info_msg("Erlpusher ~p connected to remote with protocol ~p",[Pid, Protocol]),
             gun:ws_upgrade(Pid, Pusher_url, [], #{compress => true}),
             receive
-                {'gun_ws_upgrade', Pid, ok, _} ->
+                {'gun_upgrade', Pid, _StreamRef, _Protocols, _Headers} ->
                     error_logger:info_msg("Erlpusher ~p got gun_ws_upgrade",[Pid]),
                     State#erlpusher_state{gun_pid=Pid, gun_mon_ref=GunMonRef, connected_since = get_time()}
             after Timeout_for_gun_ws_upgrade ->
