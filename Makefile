@@ -19,7 +19,6 @@ else
 ERLC_OPTS += +debug_info
 endif
 
-TEST_ERLC_OPTS += +'{parse_transform, lager_transform}'
 TEST_ERLC_OPTS += +'{parse_transform, erlroute_transform}'
 TEST_ERLC_OPTS += +debug_info
 
@@ -34,14 +33,13 @@ endif
 
 
 DEPS 		= gun 
-TEST_DEPS	= lager teaser erlroute
+TEST_DEPS	= teaser erlroute
 SHELL_DEPS	= teaser sync
 
 # our deps
 dep_teaser 		= git https://github.com/spylik/teaser 		master
 dep_erlroute 	= git https://github.com/spylik/erlroute	master
 # 3-rd party deps
-dep_lager = git https://github.com/erlang-lager/lager       master
 dep_gun         = git https://github.com/ninenines/gun      1.3.0
 
 # use with travis
@@ -60,6 +58,6 @@ endif
 # Development enviroment ("make shell" to run it).
 # --------------------------------------------------------------------
 
-SHELL_OPTS = -config deps/teaser/sys.config +c true +C multi_time_warp -pa ebin/ test/ -eval 'mlibs:discover()' -env ERL_LIBS deps -run mlibs autotest_on_compile
+SHELL_OPTS = -config ${DEPS_DIR}/teaser/sys.config +c true +C multi_time_warp -pa ebin/ test/ -eval 'mlibs:discover()' -env ERL_LIBS deps -run mlibs autotest_on_compile
 
 include erlang.mk
