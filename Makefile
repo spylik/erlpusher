@@ -1,4 +1,8 @@
 PROJECT = erlpusher
+# --------------------------------------------------------------------
+# Defining OTP version for this project which uses by kerl
+# --------------------------------------------------------------------
+ERLANG_OTP = OTP-21.0
 
 # --------------------------------------------------------------------
 # Compilation.
@@ -28,15 +32,17 @@ ifeq ($(shell basename $(shell dirname $(shell dirname $(realpath $(lastword $(M
     DEPS_DIR ?= $(shell dirname $(CURDIR))
 endif
 
+
 DEPS 		= gun 
 TEST_DEPS	= lager teaser erlroute
-SHELL_DEPS	= sync
+SHELL_DEPS	= teaser sync
 
 # our deps
 dep_teaser 		= git https://github.com/spylik/teaser 		master
 dep_erlroute 	= git https://github.com/spylik/erlroute	master
 # 3-rd party deps
-dep_gun         = git https://github.com/ninenines/gun      master
+dep_lager = git https://github.com/erlang-lager/lager       master
+dep_gun         = git https://github.com/ninenines/gun      1.3.0
 
 # use with travis
 ifeq ($(USER),travis)
@@ -54,6 +60,6 @@ endif
 # Development enviroment ("make shell" to run it).
 # --------------------------------------------------------------------
 
-SHELL_OPTS = -config deps/teaser/sys.config +c true +C multi_time_warp -pa ebin/ test/ -eval 'lager:start(), mlibs:discover()' -env ERL_LIBS deps -run mlibs autotest_on_compile
+SHELL_OPTS = -config deps/teaser/sys.config +c true +C multi_time_warp -pa ebin/ test/ -eval 'mlibs:discover()' -env ERL_LIBS deps -run mlibs autotest_on_compile
 
 include erlang.mk
