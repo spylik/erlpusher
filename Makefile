@@ -2,7 +2,7 @@ PROJECT = erlpusher
 # --------------------------------------------------------------------
 # Defining OTP version for this project which uses by kerl
 # --------------------------------------------------------------------
-ERLANG_OTP = OTP-21.0
+ERLANG_OTP = OTP-22.3
 
 # --------------------------------------------------------------------
 # Compilation.
@@ -32,7 +32,7 @@ ifeq ($(shell basename $(shell dirname $(shell dirname $(realpath $(lastword $(M
 endif
 
 
-DEPS 		= gun 
+DEPS 		= gun
 TEST_DEPS	= teaser erlroute
 SHELL_DEPS	= teaser sync
 
