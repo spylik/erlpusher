@@ -2,7 +2,9 @@ PROJECT = erlpusher
 # --------------------------------------------------------------------
 # Defining OTP version for this project which uses by kerl
 # --------------------------------------------------------------------
-ERLANG_OTP = OTP-22.3
+ifneq ($(shell basename $(shell dirname $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST)))))), deps)
+ERLANG_OTP = OTP-24.0-rc2
+endif
 
 # --------------------------------------------------------------------
 # Compilation.
